@@ -1,524 +1,325 @@
 <!DOCTYPE html>
 <html>
-
 <head>
-<title>Indoor Map Graph Editor</title>
-
-<style>
-
-body{
-font-family:Arial;
-}
-
-#mapContainer{
-position:relative;
-display:inline-block;
-}
-
-.node{
-position:absolute;
-width:12px;
-height:12px;
-background:red;
-border-radius:50%;
-transform:translate(-50%,-50%);
-cursor:pointer;
-z-index:2;
-}
-
-.label{
-position:absolute;
-font-size:12px;
-font-weight:bold;
-transform:translate(8px,-8px);
-pointer-events:none;
-}
-
-canvas{
-position:absolute;
-top:0;
-left:0;
-z-index:1;
-}
-
-button{
-margin:6px;
-padding:6px 10px;
-}
-
-</style>
+    <title>Indoor Map Graph Editor - Corrected</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f4f4; padding: 20px; }
+        #mapContainer { position: relative; display: inline-block; border: 2px solid #333; background: #fff; }
+        .node {
+            position: absolute;
+            width: 14px;
+            height: 14px;
+            background: red;
+            border: 2px solid white;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            cursor: pointer;
+            z-index: 10;
+        }
+        .label {
+            position: absolute;
+            font-size: 11px;
+            font-weight: bold;
+            color: #000;
+            background: rgba(255,255,255,0.7);
+            padding: 1px 3px;
+            border-radius: 3px;
+            transform: translate(10px, -15px);
+            pointer-events: none;
+            z-index: 11;
+        }
+        canvas { position: absolute; top: 0; left: 0; z-index: 5; pointer-events: none; }
+        .controls { margin-bottom: 15px; }
+        button { margin: 4px; padding: 8px 12px; cursor: pointer; font-weight: bold; }
+        pre { background: #eee; padding: 10px; max-height: 200px; overflow: auto; border: 1px solid #ccc; }
+        .hint { color: #666; font-style: italic; font-size: 0.9em; }
+    </style>
 </head>
-
 <body>
 
 <h2>Indoor Map Graph Editor</h2>
-
-<div id="mapContainer">
-
-<img src="FLOOR1Digital.png" id="map" width="700">
-
-<canvas id="lines"></canvas>
-
+<div class="controls">
+    <button onclick="undoNode()">Undo Node</button>
+    <button onclick="undoConnection()">Undo Connection</button>
+    <button onclick="clearAll()" style="background:#ffcccc">Clear All</button>
+    <button onclick="downloadNodes()">Download nodes.json</button>
+    <button onclick="downloadConnections()">Download connections.json</button>
+    <button onclick="runPathTest()" style="background:#ccffcc">Test Shortest Path</button>
+    <p class="hint">Click map to add node | Click node to connect | <b>ALT+Click</b>: Start (Green) | <b>CTRL+Click</b>: End (Blue) | <b>SHIFT+Click</b>: Rename</p>
 </div>
 
-<p id="coords"></p>
+<div id="mapContainer">
+    <img src="FLOOR1Digital.png" id="map" width="700" onerror="this.style.background='#ccc'; this.style.display='block'; this.alt='Map Image Not Found'">
+    <canvas id="lines"></canvas>
+</div>
 
-<button onclick="undoNode()">Undo Node</button>
-<button onclick="undoConnection()">Undo Connection</button>
-<button onclick="clearAll()">Clear All</button>
-<button onclick="downloadNodes()">Download nodes.json</button>
-<button onclick="downloadConnections()">Download connections.json</button>
-<button onclick="runPathTest()">Test Shortest Path</button>
-
-<h3>Nodes</h3>
-<pre id="nodeList"></pre>
-
-<h3>Connections</h3>
-<pre id="connList"></pre>
+<h3>Debug Data</h3>
+<div style="display:flex; gap: 20px;">
+    <div style="flex:1"><h4>Nodes</h4><pre id="nodeList"></pre></div>
+    <div style="flex:1"><h4>Connections</h4><pre id="connList"></pre></div>
+</div>
 
 <script>
-
 const img = document.getElementById("map");
 const container = document.getElementById("mapContainer");
 const canvas = document.getElementById("lines");
 const ctx = canvas.getContext("2d");
 
-canvas.width = img.width;
-canvas.height = img.height;
-
 let nodes = JSON.parse(localStorage.getItem("map_nodes")) || [];
 let connections = JSON.parse(localStorage.getItem("map_connections")) || {};
-
-let nodeElements = {};
-let selectedNode = null;
 let connectionHistory = [];
-let startNode = null;
-let endNode = null;
 
-drawSaved();
+let selectedNode = null;
+let startNodeId = null;
+let endNodeId = null;
 
-img.addEventListener("click", function(e){
-
-const rect = img.getBoundingClientRect();
-
-const x = Math.round(e.clientX - rect.left);
-const y = Math.round(e.clientY - rect.top);
-
-const node = {
-id:"N"+(nodes.length+1),
-x:x,
-y:y
+img.onload = function() {
+    canvas.width = img.width;
+    canvas.height = img.height;
+    reload();
 };
 
-nodes.push(node);
+// Handle clicks on the map image
+img.addEventListener("click", function(e) {
+    const rect = img.getBoundingClientRect();
+    const x = Math.round(e.clientX - rect.left);
+    const y = Math.round(e.clientY - rect.top);
 
-save();
+    const id = "N" + (Date.now()).toString().slice(-6); // Unique-ish ID
+    const node = { id, x, y };
 
-drawNode(node);
-
+    nodes.push(node);
+    save();
+    reload();
 });
 
-function undoNode(){
-
-if(nodes.length === 0) return;
-
-const last = nodes.pop();
-
-// remove connections to this node
-delete connections[last.id];
-
-for(let k in connections){
-connections[k] = connections[k].filter(n => n !== last.id);
+function save() {
+    localStorage.setItem("map_nodes", JSON.stringify(nodes));
+    localStorage.setItem("map_connections", JSON.stringify(connections));
+    updateLists();
 }
 
-// reset start/end if deleted
-if(startNode && startNode.id === last.id) startNode = null;
-if(endNode && endNode.id === last.id) endNode = null;
+function reload() {
+    // Clear DOM elements
+    document.querySelectorAll(".node, .label").forEach(e => e.remove());
+    
+    // Redraw nodes
+    nodes.forEach(node => {
+        const dot = document.createElement("div");
+        dot.className = "node";
+        dot.style.left = node.x + "px";
+        dot.style.top = node.y + "px";
 
-// save changes
-save();
+        if (node.id === startNodeId) dot.style.background = "green";
+        else if (node.id === endNodeId) dot.style.background = "blue";
+        else if (selectedNode && node.id === selectedNode.id) dot.style.background = "orange";
 
-// redraw everything
-reload();
+        dot.onclick = (e) => {
+            e.stopPropagation();
+            handleNodeClick(node, e);
+        };
+        container.appendChild(dot);
 
-}
-function drawNode(node){
+        const label = document.createElement("div");
+        label.className = "label";
+        label.innerText = node.id;
+        label.style.left = node.x + "px";
+        label.style.top = node.y + "px";
+        container.appendChild(label);
+    });
 
-const dot = document.createElement("div");
-
-dot.className = "node";
-
-dot.style.left = node.x + "px";
-dot.style.top = node.y + "px";
-
-dot.onclick = function(e){
-
-e.stopPropagation();
-
-nodeClick(node,dot,e);
-
-};
-
-container.appendChild(dot);
-
-nodeElements[node.id] = dot;
-
-// color logic
-if(startNode && startNode.id === node.id){
-dot.style.background = "green";
+    drawLines();
+    updateLists();
 }
 
-if(endNode && endNode.id === node.id){
-dot.style.background = "blue";
+function handleNodeClick(node, event) {
+    // 1. Rename (Shift)
+    if (event.shiftKey) {
+        const newId = prompt("Rename node:", node.id);
+        if (newId && newId !== node.id) {
+            const oldId = node.id;
+            node.id = newId;
+            
+            if (connections[oldId]) {
+                connections[newId] = connections[oldId];
+                delete connections[oldId];
+            }
+            for (let k in connections) {
+                connections[k] = connections[k].map(n => n === oldId ? newId : n);
+            }
+            if (startNodeId === oldId) startNodeId = newId;
+            if (endNodeId === oldId) endNodeId = newId;
+            save();
+        }
+        reload();
+        return;
+    }
+
+    // 2. Set Start (Alt)
+    if (event.altKey) {
+        startNodeId = (startNodeId === node.id) ? null : node.id;
+        save();
+        reload();
+        return;
+    }
+
+    // 3. Set End (Ctrl)
+    if (event.ctrlKey) {
+        endNodeId = (endNodeId === node.id) ? null : node.id;
+        save();
+        reload();
+        return;
+    }
+
+    // 4. Connection Mode
+    if (!selectedNode) {
+        selectedNode = node;
+    } else if (selectedNode.id === node.id) {
+        selectedNode = null;
+    } else {
+        const a = selectedNode.id;
+        const b = node.id;
+        if (!connections[a]) connections[a] = [];
+        if (!connections[b]) connections[b] = [];
+
+        if (!connections[a].includes(b)) {
+            connections[a].push(b);
+            connections[b].push(a);
+            connectionHistory.push([a, b]);
+        }
+        selectedNode = null;
+        save();
+    }
+    reload();
 }
 
-const label = document.createElement("div");
+function drawLines() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = "red";
+    ctx.lineWidth = 2;
 
-label.className = "label";
+    const drawn = new Set();
+    nodes.forEach(n => {
+        if (!connections[n.id]) return;
+        connections[n.id].forEach(tid => {
+            let pair = [n.id, tid].sort().join("-");
+            if (drawn.has(pair)) return;
+            drawn.add(pair);
 
-label.innerText = node.id;
-
-label.style.left = node.x + "px";
-label.style.top = node.y + "px";
-
-container.appendChild(label);
-
+            const target = nodes.find(n2 => n2.id === tid);
+            if (target) {
+                ctx.beginPath();
+                ctx.moveTo(n.x, n.y);
+                ctx.lineTo(target.x, target.y);
+                ctx.stroke();
+            }
+        });
+    });
 }
 
-function nodeClick(node,dot,event){
-
-// SHIFT = rename
-if(event.shiftKey){
-
-const newId = prompt("Rename node:", node.id);
-
-if(newId && newId !== node.id){
-
-const oldId = node.id;
-
-node.id = newId;
-
-// update connection keys
-if(connections[oldId]){
-connections[newId] = connections[oldId];
-delete connections[oldId];
+function getDistance(id1, id2) {
+    const n1 = nodes.find(n => n.id === id1);
+    const n2 = nodes.find(n => n.id === id2);
+    return Math.sqrt(Math.pow(n2.x - n1.x, 2) + Math.pow(n2.y - n1.y, 2));
 }
 
-// update references inside arrays
-for(let k in connections){
-connections[k] = connections[k].map(n => n === oldId ? newId : n);
+// Dijkstra's Algorithm for Shortest Path by Distance
+function dijkstra(startId, endId) {
+    let distances = {};
+    let prev = {};
+    let pq = new Set();
+
+    nodes.forEach(n => {
+        distances[n.id] = Infinity;
+        pq.add(n.id);
+    });
+    distances[startId] = 0;
+
+    while (pq.size > 0) {
+        let curr = Array.from(pq).reduce((min, id) => distances[id] < distances[min] ? id : min);
+        pq.delete(curr);
+
+        if (curr === endId) break;
+        if (distances[curr] === Infinity) break;
+
+        (connections[curr] || []).forEach(neighbor => {
+            let alt = distances[curr] + getDistance(curr, neighbor);
+            if (alt < distances[neighbor]) {
+                distances[neighbor] = alt;
+                prev[neighbor] = curr;
+            }
+        });
+    }
+
+    let path = [];
+    let u = endId;
+    while (prev[u]) {
+        path.unshift(u);
+        u = prev[u];
+    }
+    if (u === startId) path.unshift(startId);
+    return path.length > 1 ? path : null;
 }
 
-save();
-reload();
+function runPathTest() {
+    if (!startNodeId || !endNodeId) return alert("Set Start (Alt+Click) and End (Ctrl+Click)");
+    
+    reload(); // Reset lines
+    const path = dijkstra(startNodeId, endNodeId);
+    if (!path) return alert("No path found!");
 
+    ctx.strokeStyle = "lime";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    for (let i = 0; i < path.length - 1; i++) {
+        const a = nodes.find(n => n.id === path[i]);
+        const b = nodes.find(n => n.id === path[i+1]);
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+    }
+    ctx.stroke();
 }
 
-return;
-
-}
-// ALT = start node toggle
-if(event.altKey){
-
-if(startNode && startNode.id === node.id){
-startNode = null;
-reload();
-return;
+function undoNode() {
+    const last = nodes.pop();
+    if (!last) return;
+    delete connections[last.id];
+    for (let k in connections) connections[k] = connections[k].filter(id => id !== last.id);
+    if (startNodeId === last.id) startNodeId = null;
+    if (endNodeId === last.id) endNodeId = null;
+    save(); reload();
 }
 
-startNode = node;
-reload();
-nodeElements[node.id].style.background = "green";
-return;
-
+function undoConnection() {
+    const pair = connectionHistory.pop();
+    if (!pair) return;
+    const [a, b] = pair;
+    connections[a] = connections[a].filter(id => id !== b);
+    connections[b] = connections[b].filter(id => id !== a);
+    save(); reload();
 }
 
-// CTRL = destination node toggle
-if(event.ctrlKey){
-
-if(endNode && endNode.id === node.id){
-endNode = null;
-reload();
-return;
+function clearAll() {
+    if (!confirm("Clear everything?")) return;
+    nodes = []; connections = {}; connectionHistory = [];
+    startNodeId = null; endNodeId = null; selectedNode = null;
+    save(); reload();
 }
 
-endNode = node;
-reload();
-nodeElements[node.id].style.background = "blue";
-return;
-
+function updateLists() {
+    document.getElementById("nodeList").textContent = JSON.stringify(nodes, null, 2);
+    document.getElementById("connList").textContent = JSON.stringify(connections, null, 2);
 }
 
-// normal click = connection mode
-
-if(!selectedNode){
-
-selectedNode = node;
-dot.style.background = "orange";
-return;
-
+function downloadNodes() { downloadJSON(nodes, "nodes.json"); }
+function downloadConnections() { downloadJSON(connections, "connections.json"); }
+function downloadJSON(data, name) {
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type: "application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = name; a.click();
+    URL.revokeObjectURL(url);
 }
-
-if(selectedNode.id === node.id){
-
-selectedNode = null;
-reload();
-return;
-
-}
-
-connect(selectedNode,node);
-
-selectedNode = null;
-
-reload();
-
-}
-
-function connect(a,b){
-
-if(!connections[a.id]) connections[a.id]=[];
-if(!connections[b.id]) connections[b.id]=[];
-
-if(!connections[a.id].includes(b.id)){
-
-connections[a.id].push(b.id);
-connections[b.id].push(a.id);
-
-// save connection history
-connectionHistory.push([a.id,b.id]);
-
-}
-
-save();
-
-}
-
-function undoConnection(){
-
-if(connectionHistory.length === 0) return;
-
-const [a,b] = connectionHistory.pop();
-
-connections[a] = connections[a].filter(n => n !== b);
-connections[b] = connections[b].filter(n => n !== a);
-
-save();
-
-reload();
-
-}
-
-function drawLines(){
-
-ctx.clearRect(0,0,canvas.width,canvas.height);
-
-nodes.forEach(n=>{
-
-if(!connections[n.id]) return;
-
-connections[n.id].forEach(tid=>{
-
-const t=nodes.find(n2=>n2.id===tid);
-
-if(!t) return;
-
-ctx.beginPath();
-
-ctx.moveTo(n.x,n.y);
-
-ctx.lineTo(t.x,t.y);
-
-ctx.strokeStyle="red";
-
-ctx.lineWidth=2;
-
-ctx.stroke();
-
-});
-
-});
-
-}
-
-function drawPath(path){
-
-ctx.beginPath();
-
-ctx.strokeStyle="lime";
-
-ctx.lineWidth=4;
-
-for(let i=0;i<path.length-1;i++){
-
-let a=nodes.find(n=>n.id===path[i]);
-let b=nodes.find(n=>n.id===path[i+1]);
-
-ctx.moveTo(a.x,a.y);
-ctx.lineTo(b.x,b.y);
-
-}
-
-ctx.stroke();
-
-}
-
-function shortestPath(startId, endId){
-
-let queue=[[startId]];
-let visited=new Set();
-
-while(queue.length){
-
-let path=queue.shift();
-let nodeId=path[path.length-1];
-
-if(nodeId===endId){
-return path;
-}
-
-if(!visited.has(nodeId)){
-
-visited.add(nodeId);
-
-let neighbors=connections[nodeId] || [];
-
-for(let n of neighbors){
-
-let newPath=[...path,n];
-queue.push(newPath);
-
-}
-
-}
-
-}
-
-return null;
-
-}
-
-function clearAll(){
-
-if(!confirm("Delete all nodes and connections?")) return;
-
-// reset data
-nodes = [];
-connections = {};
-connectionHistory = [];
-startNode = null;
-endNode = null;
-selectedNode = null;
-
-// clear storage
-localStorage.removeItem("map_nodes");
-localStorage.removeItem("map_connections");
-
-// remove visual nodes
-Object.values(nodeElements).forEach(e => e.remove());
-document.querySelectorAll(".label").forEach(e => e.remove());
-
-nodeElements = {};
-
-// clear canvas
-ctx.clearRect(0,0,canvas.width,canvas.height);
-
-// update lists
-updateLists();
-
-}
-
-function runPathTest(){
-
-if(!startNode || !endNode){
-alert("Select start (ALT+click) and destination (CTRL+click)");
-return;
-}
-
-drawLines();
-
-const path = shortestPath(startNode.id, endNode.id);
-
-if(path){
-drawPath(path);
-}else{
-alert("No path found");
-}
-
-}
-
-function save(){
-
-localStorage.setItem("map_nodes",JSON.stringify(nodes));
-localStorage.setItem("map_connections",JSON.stringify(connections));
-
-updateLists();
-
-}
-
-function drawSaved(){
-
-nodes.forEach(drawNode);
-
-drawLines();
-
-updateLists();
-
-}
-
-function reload(){
-
-Object.values(nodeElements).forEach(e=>e.remove());
-
-document.querySelectorAll(".label").forEach(e=>e.remove());
-
-nodeElements={};
-
-drawSaved();
-
-}
-
-function updateLists(){
-
-document.getElementById("nodeList").textContent=
-JSON.stringify(nodes,null,2);
-
-document.getElementById("connList").textContent=
-JSON.stringify(connections,null,2);
-
-}
-
-function downloadNodes(){
-
-downloadJSON(nodes,"nodes.json");
-
-}
-
-function downloadConnections(){
-
-downloadJSON(connections,"connections.json");
-
-}
-
-function downloadJSON(data,name){
-
-const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
-
-const url=URL.createObjectURL(blob);
-
-const a=document.createElement("a");
-
-a.href=url;
-
-a.download=name;
-
-a.click();
-
-URL.revokeObjectURL(url);
-
-}
-
 </script>
-
 </body>
 </html>
