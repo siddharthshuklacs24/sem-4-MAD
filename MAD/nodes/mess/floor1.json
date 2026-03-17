@@ -1,0 +1,32 @@
+[
+  {
+    "id": "F1_STAIRS",
+    "x": 160,
+    "y": 30
+  },
+  {
+    "id": "F1_WAITING_ROOM",
+    "x": 212,
+    "y": 30
+  },
+  {
+    "id": "F1_HOSTEL_OFFICE",
+    "x": 344,
+    "y": 27
+  },
+  {
+    "id": "F1_OFFICE_ENTRANCE",
+    "x": 344,
+    "y": 79
+  },
+  {
+    "id": "F1_ADMIN_OFFICE",
+    "x": 444,
+    "y": 77
+  },
+  {
+    "id": "F1_SECRETARY_OFFICE",
+    "x": 532,
+    "y": 77
+  }
+]
