@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>BMSCE Smart Map</title>
+
+<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet"/>
+
+<style>
+body { margin:0; overflow:hidden; }
+#map { position:absolute; width:100%; height:100%; }
+
+.crosshair {
+    position:absolute;
+    top:50%; left:50%;
+    transform:translate(-50%,-50%);
+    z-index:10;
+}
+</style>
+</head>
+
+<body>
+
+<div class="crosshair">
+<svg width="30" height="30">
+<circle cx="15" cy="15" r="3" fill="red"/>
+</svg>
+</div>
+
+<div id="map"></div>
+
+<script>
+
+// 🔥 DEVICE DETECTION
+const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+// 🔥 GOOGLE-LIKE BASEMAP
+const map = new maplibregl.Map({
+    container: 'map',
+    style: 'https://api.maptiler.com/maps/streets/style.json?key=fcBt2RY6FKMClZahmuBI',
+    center: [77.5654, 12.9410],
+    zoom: 18,
+    pitch: 45
+});
+
+// CONTROLS
+const geolocate = new maplibregl.GeolocateControl({
+    positionOptions: {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+    },
+    trackUserLocation: true,
+    showUserHeading: true,
+    showAccuracyCircle: true
+});
+map.addControl(geolocate);
+map.addControl(new maplibregl.NavigationControl());
+
+// CAMPUS
+const campusBounds = [
+    [77.5645, 12.9395],
+    [77.5665, 12.9425]
+];
+
+function isInsideCampus(lng, lat) {
+    return lng > campusBounds[0][0] &&
+           lng < campusBounds[1][0] &&
+           lat > campusBounds[0][1] &&
+           lat < campusBounds[1][1];
+}
+
+// BLOCKS
+const blocks = [
+    { name: "MESS BLOCK", lng: 77.5653, lat: 12.9399 },
+    { name: "SPORTS BLOCK", lng: 77.5660, lat: 12.9406 },
+    { name: "MECH BLOCK", lng: 77.5653, lat: 12.9420 },
+    { name: "PJ BLOCK", lng: 77.5654, lat: 12.9407 },
+    { name: "PG BLOCK", lng: 77.5658, lat: 12.9415 },
+    { name: "SCIENCE BLOCK", lng: 77.5650, lat: 12.9407 }
+];
+
+// INDOOR
+let selectedLevel = 0;
+
+const indoorData = {
+"type":"FeatureCollection",
+"features":[
+{
+"type":"Feature",
+"properties":{"name":"CSE LAB","level":1},
+"geometry":{"type":"Polygon","coordinates":[[[77.5652,12.9412],[77.5653,12.9412],[77.5653,12.9413],[77.5652,12.9413],[77.5652,12.9412]]]}
+},
+{
+"type":"Feature",
+"properties":{"name":"CLASSROOM 101","level":0},
+"geometry":{"type":"Polygon","coordinates":[[[77.5654,12.9410],[77.5655,12.9410],[77.5655,12.9411],[77.5654,12.9411],[77.5654,12.9410]]]}
+}
+]
+};
+
+// LOAD
+map.on('load', () => {
+
+    map.addSource('blocks', {
+        type: 'geojson',
+        data: {
+            type:'FeatureCollection',
+            features: blocks.map(b => ({
+                type:'Feature',
+                properties:{name:b.name},
+                geometry:{type:'Point',coordinates:[b.lng,b.lat]}
+            }))
+        }
+    });
+
+    map.addLayer({
+        id:'blocks-layer',
+        type:'symbol',
+        source:'blocks',
+        layout:{
+            'text-field':['get','name'],
+            'text-size':12
+        }
+    });
+
+    map.addSource('indoor', {
+        type:'geojson',
+        data: indoorData
+    });
+
+    map.addLayer({
+        id:'indoor-fill',
+        type:'fill',
+        source:'indoor',
+        paint:{
+            'fill-color':'#1976d2',
+            'fill-opacity':0.5
+        }
+    });
+
+    map.addLayer({
+        id:'indoor-label',
+        type:'symbol',
+        source:'indoor',
+        layout:{
+            'text-field':['get','name']
+        }
+    });
+
+    updateFloor();
+});
+
+// FLOOR
+function updateFloor() {
+    map.setFilter('indoor-fill',['==',['get','level'],selectedLevel]);
+    map.setFilter('indoor-label',['==',['get','level'],selectedLevel]);
+}
+
+// GPS SYSTEM
+let readings = [];
+let lastPos = null;
+let userMarker = null;
+
+function smooth(pos, factor) {
+    if (!lastPos) return pos;
+    return [
+        lastPos[0] + (pos[0] - lastPos[0]) * factor,
+        lastPos[1] + (pos[1] - lastPos[1]) * factor
+    ];
+}
+
+map.on('geolocate', (e) => {
+
+    let raw = [e.coords.longitude, e.coords.latitude];
+
+    // MOBILE
+    if (isMobile) {
+        let final = smooth(raw, 0.7);
+        lastPos = final;
+        updateMarker(final);
+    }
+
+    // DESKTOP
+    else {
+        readings.push(raw);
+        if (readings.length > 5) readings.shift();
+
+        const avg = readings.reduce((a,b)=>[a[0]+b[0],a[1]+b[1]],[0,0]);
+        let final = [avg[0]/readings.length, avg[1]/readings.length];
+
+        final = smooth(final, 0.3);
+        lastPos = final;
+
+        updateMarker(final);
+    }
+});
+
+function updateMarker(pos) {
+    if (!userMarker) {
+        userMarker = new maplibregl.Marker({color:'blue'})
+            .setLngLat(pos)
+            .addTo(map);
+    } else {
+        userMarker.setLngLat(pos);
+    }
+}
+
+// SWITCH INDOOR / OUTDOOR
+map.on('move', () => {
+    const c = map.getCenter();
+
+    if (isInsideCampus(c.lng, c.lat)) {
+        try {
+            map.setLayoutProperty('building','visibility','none');
+            map.setLayoutProperty('poi-label','visibility','none');
+        } catch(e){}
+    } else {
+        try {
+            map.setLayoutProperty('building','visibility','visible');
+            map.setLayoutProperty('poi-label','visibility','visible');
+        } catch(e){}
+    }
+});
+
+// FLUTTER BRIDGE
+window.addEventListener('message', (event) => {
+
+    if (event.data === 'locateUser') {
+        geolocate.trigger();
+    }
+
+    if (event.data.type === 'switchLevel') {
+        selectedLevel = event.data.level;
+        updateFloor();
+    }
+});
+
+</script>
+</body>
+</html>
