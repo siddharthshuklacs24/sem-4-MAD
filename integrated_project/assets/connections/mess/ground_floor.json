@@ -1,0 +1,40 @@
+{
+  "FG_STAIRS": [
+    "FG_STORAGE",
+    "FG_GUEST_DINING_HALL"
+  ],
+  "FG_GUEST_DINING_HALL": [
+    "FG_STAIRS"
+  ],
+  "FG_STORAGE": [
+    "FG_CORRIDOR_1",
+    "FG_STAIRS"
+  ],
+  "FG_ENTRANCE": [
+    "FG_CORRIDOR_1"
+  ],
+  "FG_SHOP": [
+    "FG_CORRIDOR_1",
+    "FG_MPH"
+  ],
+  "FG_MPH": [
+    "FG_SHOP",
+    "FG_CORRIDOR_2"
+  ],
+  "FG_CORRIDOR_2": [
+    "FG_MPH",
+    "FG_WASHROOM"
+  ],
+  "FG_CORRIDOR_1": [
+    "FG_ENTRANCE",
+    "FG_SHOP",
+    "FG_MESS_HALL",
+    "FG_STORAGE"
+  ],
+  "FG_WASHROOM": [
+    "FG_CORRIDOR_2"
+  ],
+  "FG_MESS_HALL": [
+    "FG_CORRIDOR_1"
+  ]
+}
