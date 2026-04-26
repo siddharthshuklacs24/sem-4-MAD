@@ -1,0 +1,12 @@
+{
+    "Stairs" : "FG_STAIRS",
+    "Guest Dining Hall" : "FG_GUEST_DINING_HALL",
+    "Storage" : "FG_STORAGE",
+    "Entrance" : "FG_ENTRANCE",
+    "Shop" : "FG_SHOP",
+    "MPH" : "FG_MPH",
+    "Corridor 2" : "FG_CORRIDOR_2",
+    "Corridor 1" : "FG_CORRIDOR_1",
+    "Washroom" : "FG_WASHROOM",
+    "Mess Hall" : "FG_MESS_HALL"
+}
