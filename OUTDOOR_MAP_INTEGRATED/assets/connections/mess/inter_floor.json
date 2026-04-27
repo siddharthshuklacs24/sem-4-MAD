@@ -1,0 +1,4 @@
+{
+  "FG_STAIRS": ["F1_STAIRS"],
+  "F1_STAIRS": ["FG_STAIRS"]
+}

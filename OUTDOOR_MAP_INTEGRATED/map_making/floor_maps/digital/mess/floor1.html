@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Indoor Map Graph Editor - Corrected</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f4f4; padding: 20px; }
+        #mapContainer { position: relative; display: inline-block; border: 2px solid #333; background: #fff; }
+        .node {
+            position: absolute;
+            width: 14px;
+            height: 14px;
+            background: red;
+            border: 2px solid white;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            cursor: pointer;
+            z-index: 10;
+        }
+        .label {
+            position: absolute;
+            font-size: 11px;
+            font-weight: bold;
+            color: #000;
+            background: rgba(255,255,255,0.7);
+            padding: 1px 3px;
+            border-radius: 3px;
+            transform: translate(10px, -15px);
+            pointer-events: none;
+            z-index: 11;
+        }
+        canvas { position: absolute; top: 0; left: 0; z-index: 5; pointer-events: none; }
+        .controls { margin-bottom: 15px; }
+        button { margin: 4px; padding: 8px 12px; cursor: pointer; font-weight: bold; }
+        pre { background: #eee; padding: 10px; max-height: 200px; overflow: auto; border: 1px solid #ccc; }
+        .hint { color: #666; font-style: italic; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+
+<h2>Indoor Map Graph Editor</h2>
+<div class="controls">
+    <button onclick="undoNode()">Undo Node</button>
+    <button onclick="undoConnection()">Undo Connection</button>
+    <button onclick="clearAll()" style="background:#ffcccc">Clear All</button>
+    <button onclick="downloadNodes()">Download nodes.json</button>
+    <button onclick="downloadConnections()">Download connections.json</button>
+    <button onclick="runPathTest()" style="background:#ccffcc">Test Shortest Path</button>
+    <p class="hint">Click map to add node | Click node to connect | <b>ALT+Click</b>: Start (Green) | <b>CTRL+Click</b>: End (Blue) | <b>SHIFT+Click</b>: Rename</p>
+</div>
+
+<div id="mapContainer">
+    <img src="FLOOR1Digital.png" id="map" width="700" onerror="this.style.background='#ccc'; this.style.display='block'; this.alt='Map Image Not Found'">
+    <canvas id="lines"></canvas>
+</div>
+
+<h3>Debug Data</h3>
+<div style="display:flex; gap: 20px;">
+    <div style="flex:1"><h4>Nodes</h4><pre id="nodeList"></pre></div>
+    <div style="flex:1"><h4>Connections</h4><pre id="connList"></pre></div>
+</div>
+
+<script>
+const img = document.getElementById("map");
+const container = document.getElementById("mapContainer");
+const canvas = document.getElementById("lines");
+const ctx = canvas.getContext("2d");
+
+let nodes = JSON.parse(localStorage.getItem("map_nodes")) || [];
+let connections = JSON.parse(localStorage.getItem("map_connections")) || {};
+let connectionHistory = [];
+
+let selectedNode = null;
+let startNodeId = null;
+let endNodeId = null;
+
+img.onload = function() {
+    canvas.width = img.width;
+    canvas.height = img.height;
+    reload();
+};
+
+// Handle clicks on the map image
+img.addEventListener("click", function(e) {
+    const rect = img.getBoundingClientRect();
+    const x = Math.round(e.clientX - rect.left);
+    const y = Math.round(e.clientY - rect.top);
+
+    const id = "N" + (Date.now()).toString().slice(-6); // Unique-ish ID
+    const node = { id, x, y };
+
+    nodes.push(node);
+    save();
+    reload();
+});
+
+function save() {
+    localStorage.setItem("map_nodes", JSON.stringify(nodes));
+    localStorage.setItem("map_connections", JSON.stringify(connections));
+    updateLists();
+}
+
+function reload() {
+    // Clear DOM elements
+    document.querySelectorAll(".node, .label").forEach(e => e.remove());
+    
+    // Redraw nodes
+    nodes.forEach(node => {
+        const dot = document.createElement("div");
+        dot.className = "node";
+        dot.style.left = node.x + "px";
+        dot.style.top = node.y + "px";
+
+        if (node.id === startNodeId) dot.style.background = "green";
+        else if (node.id === endNodeId) dot.style.background = "blue";
+        else if (selectedNode && node.id === selectedNode.id) dot.style.background = "orange";
+
+        dot.onclick = (e) => {
+            e.stopPropagation();
+            handleNodeClick(node, e);
+        };
+        container.appendChild(dot);
+
+        const label = document.createElement("div");
+        label.className = "label";
+        label.innerText = node.id;
+        label.style.left = node.x + "px";
+        label.style.top = node.y + "px";
+        container.appendChild(label);
+    });
+
+    drawLines();
+    updateLists();
+}
+
+function handleNodeClick(node, event) {
+    // 1. Rename (Shift)
+    if (event.shiftKey) {
+        const newId = prompt("Rename node:", node.id);
+        if (newId && newId !== node.id) {
+            const oldId = node.id;
+            node.id = newId;
+            
+            if (connections[oldId]) {
+                connections[newId] = connections[oldId];
+                delete connections[oldId];
+            }
+            for (let k in connections) {
+                connections[k] = connections[k].map(n => n === oldId ? newId : n);
+            }
+            if (startNodeId === oldId) startNodeId = newId;
+            if (endNodeId === oldId) endNodeId = newId;
+            save();
+        }
+        reload();
+        return;
+    }
+
+    // 2. Set Start (Alt)
+    if (event.altKey) {
+        startNodeId = (startNodeId === node.id) ? null : node.id;
+        save();
+        reload();
+        return;
+    }
+
+    // 3. Set End (Ctrl)
+    if (event.ctrlKey) {
+        endNodeId = (endNodeId === node.id) ? null : node.id;
+        save();
+        reload();
+        return;
+    }
+
+    // 4. Connection Mode
+    if (!selectedNode) {
+        selectedNode = node;
+    } else if (selectedNode.id === node.id) {
+        selectedNode = null;
+    } else {
+        const a = selectedNode.id;
+        const b = node.id;
+        if (!connections[a]) connections[a] = [];
+        if (!connections[b]) connections[b] = [];
+
+        if (!connections[a].includes(b)) {
+            connections[a].push(b);
+            connections[b].push(a);
+            connectionHistory.push([a, b]);
+        }
+        selectedNode = null;
+        save();
+    }
+    reload();
+}
+
+function drawLines() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = "red";
+    ctx.lineWidth = 2;
+
+    const drawn = new Set();
+    nodes.forEach(n => {
+        if (!connections[n.id]) return;
+        connections[n.id].forEach(tid => {
+            let pair = [n.id, tid].sort().join("-");
+            if (drawn.has(pair)) return;
+            drawn.add(pair);
+
+            const target = nodes.find(n2 => n2.id === tid);
+            if (target) {
+                ctx.beginPath();
+                ctx.moveTo(n.x, n.y);
+                ctx.lineTo(target.x, target.y);
+                ctx.stroke();
+            }
+        });
+    });
+}
+
+function getDistance(id1, id2) {
+    const n1 = nodes.find(n => n.id === id1);
+    const n2 = nodes.find(n => n.id === id2);
+    return Math.sqrt(Math.pow(n2.x - n1.x, 2) + Math.pow(n2.y - n1.y, 2));
+}
+
+// Dijkstra's Algorithm for Shortest Path by Distance
+function dijkstra(startId, endId) {
+    let distances = {};
+    let prev = {};
+    let pq = new Set();
+
+    nodes.forEach(n => {
+        distances[n.id] = Infinity;
+        pq.add(n.id);
+    });
+    distances[startId] = 0;
+
+    while (pq.size > 0) {
+        let curr = Array.from(pq).reduce((min, id) => distances[id] < distances[min] ? id : min);
+        pq.delete(curr);
+
+        if (curr === endId) break;
+        if (distances[curr] === Infinity) break;
+
+        (connections[curr] || []).forEach(neighbor => {
+            let alt = distances[curr] + getDistance(curr, neighbor);
+            if (alt < distances[neighbor]) {
+                distances[neighbor] = alt;
+                prev[neighbor] = curr;
+            }
+        });
+    }
+
+    let path = [];
+    let u = endId;
+    while (prev[u]) {
+        path.unshift(u);
+        u = prev[u];
+    }
+    if (u === startId) path.unshift(startId);
+    return path.length > 1 ? path : null;
+}
+
+function runPathTest() {
+    if (!startNodeId || !endNodeId) return alert("Set Start (Alt+Click) and End (Ctrl+Click)");
+    
+    reload(); // Reset lines
+    const path = dijkstra(startNodeId, endNodeId);
+    if (!path) return alert("No path found!");
+
+    ctx.strokeStyle = "lime";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    for (let i = 0; i < path.length - 1; i++) {
+        const a = nodes.find(n => n.id === path[i]);
+        const b = nodes.find(n => n.id === path[i+1]);
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+    }
+    ctx.stroke();
+}
+
+function undoNode() {
+    const last = nodes.pop();
+    if (!last) return;
+    delete connections[last.id];
+    for (let k in connections) connections[k] = connections[k].filter(id => id !== last.id);
+    if (startNodeId === last.id) startNodeId = null;
+    if (endNodeId === last.id) endNodeId = null;
+    save(); reload();
+}
+
+function undoConnection() {
+    const pair = connectionHistory.pop();
+    if (!pair) return;
+    const [a, b] = pair;
+    connections[a] = connections[a].filter(id => id !== b);
+    connections[b] = connections[b].filter(id => id !== a);
+    save(); reload();
+}
+
+function clearAll() {
+    if (!confirm("Clear everything?")) return;
+    nodes = []; connections = {}; connectionHistory = [];
+    startNodeId = null; endNodeId = null; selectedNode = null;
+    save(); reload();
+}
+
+function updateLists() {
+    document.getElementById("nodeList").textContent = JSON.stringify(nodes, null, 2);
+    document.getElementById("connList").textContent = JSON.stringify(connections, null, 2);
+}
+
+function downloadNodes() { downloadJSON(nodes, "nodes.json"); }
+function downloadConnections() { downloadJSON(connections, "connections.json"); }
+function downloadJSON(data, name) {
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type: "application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = name; a.click();
+    URL.revokeObjectURL(url);
+}
+</script>
+</body>
+</html>

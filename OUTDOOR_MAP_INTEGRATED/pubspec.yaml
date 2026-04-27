@@ -1,0 +1,44 @@
+name: indoor_navigation
+description: "A campus navigation system for BMSCE."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.4 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_map: ^6.1.0
+  flutter_map_cancellable_tile_provider: ^2.0.0
+  latlong2: ^0.9.1
+  geolocator: ^10.1.0
+  permission_handler: ^11.3.0
+  http: ^1.2.0
+  cupertino_icons: ^1.0.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  google_maps_flutter: ^2.6.1
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    # Explicit Outdoor Data
+    - assets/nodes/outdoor/nodes.json
+    - assets/connections/outdoor/roads.json
+    
+    # Explicit Indoor (Mess) Data
+    - assets/nodes/mess/floor1.json
+    - assets/nodes/mess/ground_floor.json
+    
+    # Directory Declared Assets
+    - assets/connections/mess/
+    - assets/connections/outdoor/
+    - assets/destinations/mess/
+    - assets/destinations/outdoor/
+    - assets/images/mess/
