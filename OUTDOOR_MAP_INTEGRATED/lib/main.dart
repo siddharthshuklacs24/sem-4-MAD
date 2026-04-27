@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:indoor_navigation/services/path_service.dart';
 import 'package:collection/collection.dart';
+
 import '../models/node.dart';
-import '../models/destination.dart';
 import '../services/node_service.dart';
 import '../services/graph_service.dart';
 import '../services/navigation_controller.dart';
-import '../services/destination_service.dart';
 import 'screens/outdoor_screen.dart';
 
 void main() {
@@ -20,7 +19,7 @@ class IndoorNavigationApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(useMaterial3: true, colorSchemeSeed: Colors.blue),
+      theme: ThemeData(useMaterial3: true),
       home: const MapScreen(),
     );
   }
@@ -35,13 +34,18 @@ class MapScreen extends StatefulWidget {
 
 class _MapScreenState extends State<MapScreen> {
   List<Node> nodes = [];
-  List<Destination> destinations = [];           // ← NEW
   Map<String, List<String>> connections = {};
+
   NavMode selectedMode = NavMode.indoor;
+
   String currentFloor = "F1";
   String? startNodeId;
   String? endNodeId;
+
   List<String> path = [];
+  List<String> recentSearches = [];
+
+  double mapScale = 1.0;
 
   final SearchController startSearchController = SearchController();
   final SearchController endSearchController = SearchController();
@@ -55,61 +59,47 @@ class _MapScreenState extends State<MapScreen> {
   void loadData() async {
     final loadedNodes = await NodeService.loadNodes();
     final graph = await GraphService.buildGraph();
-    final loadedDestinations = await DestinationService.loadDestinations(); // ← NEW
     if (!mounted) return;
     setState(() {
       nodes = loadedNodes;
       connections = graph;
-      destinations = loadedDestinations;         // ← NEW
+    });
+  }
+
+  Future<void> switchFloorAnimated(String newFloor) async {
+    if (newFloor == currentFloor) return;
+    setState(() => currentFloor = newFloor);
+  }
+
+  void saveRecent(String id) {
+    setState(() {
+      recentSearches.remove(id);
+      recentSearches.insert(0, id);
+      if (recentSearches.length > 5) recentSearches.removeLast();
     });
   }
 
   void calculatePathIfReady() async {
     if (startNodeId != null && endNodeId != null) {
-      if (startNodeId == endNodeId) {
-        setState(() => path = []);
-        return;
-      }
+      final result = await getPath(
+        mode: NavMode.indoor,
+        source: startNodeId!,
+        destination: endNodeId!,
+      );
 
-      try {
-        final result = await getPath(
-          mode: selectedMode,
-          source: startNodeId!,
-          destination: endNodeId!,
+      final newPath = result.map((p) {
+        final node = nodes.firstWhere(
+          (n) =>
+              (n.x - p.latitude).abs() < 1 &&
+              (n.y - p.longitude).abs() < 1,
         );
+        return node.id;
+      }).toList();
 
-        if (selectedMode == NavMode.indoor) {
-          final newPath = result.map((p) {
-            final node = nodes.firstWhere(
-              (n) =>
-                  (n.x - p.latitude).abs() < 1 &&
-                  (n.y - p.longitude).abs() < 1,
-            );
-            return node.id;
-          }).toList();
-
-          setState(() {
-            path = newPath;
-
-            if (path.isNotEmpty) {
-              final startNode =
-                  nodes.firstWhereOrNull((n) => n.id == path.first);
-              if (startNode != null) {
-                currentFloor = startNode.floor.trim().toUpperCase();
-              }
-            }
-          });
-        } else {
-          print("OUTDOOR PATH: $result");
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("Outdoor path fetched (check console)"),
-            ),
-          );
-        }
-      } catch (e) {
-        print("ERROR: $e");
-      }
+      setState(() {
+        path = newPath;
+        mapScale = 1.3;
+      });
     }
   }
 
@@ -119,151 +109,164 @@ class _MapScreenState extends State<MapScreen> {
         : "assets/images/mess/FLOOR1Digital.png";
   }
 
-  String getFloorName(String floorCode) {
-    return floorCode == "FG" ? "Ground Floor" : "Floor $floorCode";
+  String formatNodeName(String rawId) {
+    if (rawId.contains('_')) {
+      final parts = rawId.split('_');
+      final floorPrefix = parts[0];
+      parts.removeAt(0);
+      final name =
+          parts.map((w) => w[0].toUpperCase() + w.substring(1)).join(' ');
+      return "$name ($floorPrefix)";
+    }
+    return rawId;
   }
 
   @override
   Widget build(BuildContext context) {
     final currentFloorNodes = nodes
         .where((n) =>
-            n.floor.trim().toUpperCase() == currentFloor.trim().toUpperCase())
+            n.floor.trim().toUpperCase() ==
+            currentFloor.trim().toUpperCase())
         .toList();
 
-    List<String> floorsInPath = [];
-    for (var id in path) {
-      final node = nodes.firstWhereOrNull((n) => n.id == id);
-      if (node != null) floorsInPath.add(node.floor.trim().toUpperCase());
-    }
-
-    List<String> floorsToShow = path.isEmpty
-        ? nodes.map((n) => n.floor.trim().toUpperCase()).toSet().toList()
-        : floorsInPath.toSet().toList();
+    final floors = nodes
+        .map((n) => n.floor.trim().toUpperCase())
+        .toSet()
+        .toList();
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Navigation"),
+        title: const Text("Campus Navigator"),
         actions: [
-          DropdownButton<NavMode>(
-            value: selectedMode,
-            items: const [
-              DropdownMenuItem(value: NavMode.indoor, child: Text("Indoor")),
-              DropdownMenuItem(value: NavMode.outdoor, child: Text("Outdoor")),
-            ],
-            onChanged: (val) {
-              if (val != null) {
-                if (val == NavMode.outdoor) {
+          Row(
+            children: [
+              ChoiceChip(
+                label: const Text("Indoor"),
+                selected: selectedMode == NavMode.indoor,
+                onSelected: (_) =>
+                    setState(() => selectedMode = NavMode.indoor),
+              ),
+              const SizedBox(width: 6),
+              ChoiceChip(
+                label: const Text("Outdoor"),
+                selected: selectedMode == NavMode.outdoor,
+                onSelected: (_) {
+                  setState(() => selectedMode = NavMode.outdoor);
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const OutdoorScreen(),
-                    ),
+                        builder: (_) => const OutdoorScreen()),
                   );
-                } else {
-                  setState(() {
-                    selectedMode = NavMode.indoor;
-                    path = [];
-                    startNodeId = null;
-                    endNodeId = null;
-                  });
-                }
-              }
-            },
+                },
+              ),
+            ],
           ),
-          if (startNodeId != null || endNodeId != null)
-            IconButton(
-              icon: const Icon(Icons.refresh, color: Colors.red),
-              onPressed: () => setState(() {
-                startNodeId = null;
-                endNodeId = null;
-                path = [];
-                startSearchController.clear();
-                endSearchController.clear();
-              }),
-            ),
           DropdownButton<String>(
-            value: floorsToShow.contains(currentFloor)
-                ? currentFloor
-                : (floorsToShow.isNotEmpty ? floorsToShow.first : null),
-            items: floorsToShow
-                .map((f) => DropdownMenuItem(
-                    value: f, child: Text(getFloorName(f))))
-                .toList(),
+            value: currentFloor,
+            underline: const SizedBox(),
+            items: floors.map((f) {
+              return DropdownMenuItem(
+                value: f,
+                child:
+                    Text(f == "FG" ? "Ground Floor" : "Floor $f"),
+              );
+            }).toList(),
             onChanged: (val) {
-              if (val != null) setState(() => currentFloor = val);
+              if (val != null) switchFloorAnimated(val);
             },
           ),
-          const SizedBox(width: 12),
         ],
       ),
+
       body: Stack(
         children: [
-          InteractiveViewer(
-            constrained: false,
-            boundaryMargin: const EdgeInsets.all(2000),
-            minScale: 0.1,
-            maxScale: 4.0,
-            child: SizedBox(
-              width: 700,
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Image.asset(getMapImage(), width: 700, fit: BoxFit.fitWidth),
-                  Positioned.fill(
-                    child: CustomPaint(
-                      painter: GraphPainter(
-                          nodes, currentFloor, connections, path),
-                    ),
-                  ),
-                  ...currentFloorNodes.map((node) {
-                    Color nodeColor = node.id == startNodeId
-                        ? Colors.green
-                        : (node.id == endNodeId
-                            ? Colors.orange
-                            : Colors.red.withOpacity(0.5));
-                    double size =
-                        (node.id == startNodeId || node.id == endNodeId)
-                            ? 20
-                            : 12;
-                    return Positioned(
-                      left: node.x - (size / 2),
-                      top: node.y - (size / 2),
-                      child: Container(
-                        width: size,
-                        height: size,
-                        decoration: BoxDecoration(
-                          color: nodeColor,
-                          shape: BoxShape.circle,
-                          border:
-                              Border.all(color: Colors.white, width: 2),
+          Center(
+            child: AnimatedScale(
+              scale: mapScale,
+              duration: const Duration(milliseconds: 300),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(25),
+                child: SizedBox(
+                  width: 700,
+                  child: Stack(
+                    children: [
+                      Image.asset(getMapImage(),
+                          fit: BoxFit.cover),
+
+                      Positioned.fill(
+                        child: CustomPaint(
+                          painter: GraphPainter(
+                              nodes,
+                              currentFloor,
+                              connections,
+                              path),
                         ),
                       ),
-                    );
-                  }).toList(),
-                ],
+
+                      ...currentFloorNodes.map((node) {
+                        return Positioned(
+                          left: node.x - 12,
+                          top: node.y - 24,
+                          child: Icon(Icons.location_on,
+                              color: node.id == startNodeId
+                                  ? Colors.green
+                                  : node.id == endNodeId
+                                      ? Colors.orange
+                                      : Colors.blue),
+                        );
+                      }),
+                    ],
+                  ),
+                ),
               ),
             ),
           ),
+
+          /// SEARCH
           Positioned(
-            top: 10,
-            left: 10,
-            right: 10,
-            child: Card(
-              elevation: 8,
-              child: Padding(
-                padding: const EdgeInsets.all(8.0),
+            top: 20,
+            left: 16,
+            right: 16,
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                constraints:
+                    const BoxConstraints(maxWidth: 520),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.92),
+                  borderRadius: BorderRadius.circular(30),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.12),
+                      blurRadius: 25,
+                    ),
+                  ],
+                ),
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    buildSearchField("From", startSearchController, (id) {
-                      startNodeId = id;
-                      calculatePathIfReady();
-                    }),
-                    const Divider(),
-                    buildSearchField("To", endSearchController, (id) {
-                      endNodeId = id;
-                      calculatePathIfReady();
-                    }),
+                    buildModernSearchField(
+                      "From",
+                      Icons.my_location,
+                      Colors.green,
+                      startSearchController,
+                      (id) {
+                        startNodeId = id;
+                        saveRecent(id);
+                        calculatePathIfReady();
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    buildModernSearchField(
+                      "To",
+                      Icons.location_on,
+                      Colors.orange,
+                      endSearchController,
+                      (id) {
+                        endNodeId = id;
+                        saveRecent(id);
+                        calculatePathIfReady();
+                      },
+                    ),
                   ],
                 ),
               ),
@@ -274,90 +277,128 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  Widget buildSearchField(
-      String label, SearchController controller, Function(String) onSelected) {
+  /// 🔥 UPDATED SEARCH FIELD WITH RECENT SEARCHES
+  Widget buildModernSearchField(
+    String label,
+    IconData icon,
+    Color color,
+    SearchController controller,
+    Function(String) onSelected,
+  ) {
     return SearchAnchor(
       searchController: controller,
       builder: (context, controller) {
-        return SearchBar(
-          controller: controller,
-          hintText: label,
-          padding: WidgetStateProperty.all(
-              const EdgeInsets.symmetric(horizontal: 16)),
-          leading: Icon(
-              label == "From" ? Icons.my_location : Icons.location_on,
-              color: label == "From" ? Colors.green : Colors.orange),
+        return GestureDetector(
           onTap: () => controller.openView(),
+          child: AbsorbPointer(
+            child: Container(
+              height: 52,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(25),
+              ),
+              child: Row(
+                children: [
+                  Icon(icon, color: color),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: controller,
+                      decoration: InputDecoration(
+                        hintText: label,
+                        border: InputBorder.none,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         );
       },
+
       suggestionsBuilder: (context, controller) {
         final keyword = controller.text.toLowerCase();
-        return destinations                                    // ← CHANGED
-            .where((d) => d.name.toLowerCase().contains(keyword))
-            .map((d) => ListTile(
-                  title: Text(d.name),
-                  subtitle: Text("Located on ${getFloorName(d.floor)}"),
-                  onTap: () {
-                    controller.closeView(d.name);
-                    onSelected(d.nodeId);                     // ← passes node ID for pathfinding
-                  },
-                ))
-            .toList();
+
+        final filtered = nodes.where((n) =>
+            formatNodeName(n.id)
+                .toLowerCase()
+                .contains(keyword));
+
+        final recentWidgets = recentSearches.map((id) {
+          return ListTile(
+            leading:
+                const Icon(Icons.history, color: Colors.grey),
+            title: Text(formatNodeName(id)),
+            onTap: () {
+              controller.closeView(formatNodeName(id));
+              onSelected(id);
+            },
+          );
+        }).toList();
+
+        final searchWidgets = filtered.map((n) {
+          return ListTile(
+            leading:
+                const Icon(Icons.place, color: Colors.blue),
+            title: Text(formatNodeName(n.id)),
+            onTap: () {
+              controller.closeView(formatNodeName(n.id));
+              onSelected(n.id);
+            },
+          );
+        }).toList();
+
+        return [
+          if (recentSearches.isNotEmpty && keyword.isEmpty) ...[
+            const Padding(
+              padding: EdgeInsets.symmetric(
+                  horizontal: 16, vertical: 6),
+              child: Text("Recent Searches",
+                  style:
+                      TextStyle(fontWeight: FontWeight.bold)),
+            ),
+            ...recentWidgets,
+            const Divider(),
+          ],
+          ...searchWidgets,
+        ];
       },
     );
   }
 }
 
 class GraphPainter extends CustomPainter {
-  final List<Node> allNodes;
-  final String activeFloor;
+  final List<Node> nodes;
+  final String floor;
   final Map<String, List<String>> connections;
   final List<String> path;
 
-  GraphPainter(this.allNodes, this.activeFloor, this.connections, this.path);
+  GraphPainter(this.nodes, this.floor, this.connections, this.path);
 
   @override
   void paint(Canvas canvas, Size size) {
-    final basePaint = Paint()
-      ..color = Colors.blue.withOpacity(0.05)
-      ..strokeWidth = 1.0;
-    final pathPaint = Paint()
-      ..color = Colors.blueAccent
-      ..strokeWidth = 4.5
-      ..strokeCap = StrokeCap.round
-      ..style = PaintingStyle.stroke;
+    final paint = Paint()
+      ..strokeWidth = 4
+      ..color = Colors.blueAccent;
 
-    for (var entry in connections.entries) {
-      final fNode = allNodes.firstWhereOrNull((n) => n.id == entry.key);
-      if (fNode == null ||
-          fNode.floor.trim().toUpperCase() != activeFloor) continue;
+    for (int i = 0; i < path.length - 1; i++) {
+      final a =
+          nodes.firstWhereOrNull((n) => n.id == path[i]);
+      final b =
+          nodes.firstWhereOrNull((n) => n.id == path[i + 1]);
 
-      for (var tId in entry.value) {
-        final tNode = allNodes.firstWhereOrNull((n) => n.id == tId);
-        if (tNode != null &&
-            tNode.floor.trim().toUpperCase() == activeFloor) {
-          canvas.drawLine(
-              Offset(fNode.x, fNode.y), Offset(tNode.x, tNode.y), basePaint);
-        }
-      }
-    }
+      if (a == null || b == null) continue;
+      if (a.floor != floor || b.floor != floor) continue;
 
-    if (path.isNotEmpty) {
-      for (int i = 0; i < path.length - 1; i++) {
-        final fNode = allNodes.firstWhereOrNull((n) => n.id == path[i]);
-        final tNode = allNodes.firstWhereOrNull((n) => n.id == path[i + 1]);
-
-        if (fNode != null && tNode != null) {
-          if (fNode.floor.trim().toUpperCase() == activeFloor &&
-              tNode.floor.trim().toUpperCase() == activeFloor) {
-            canvas.drawLine(
-                Offset(fNode.x, fNode.y), Offset(tNode.x, tNode.y), pathPaint);
-          }
-        }
-      }
+      canvas.drawLine(
+          Offset(a.x, a.y), Offset(b.x, b.y), paint);
     }
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+  bool shouldRepaint(covariant CustomPainter oldDelegate) =>
+      true;
 }
